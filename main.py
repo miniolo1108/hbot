@@ -11,6 +11,9 @@ async def on_ready():
     print('------')
     for guild in bot.guilds:
         print(f'서버 이름: {guild.name} (ID: {guild.id})')
+        total_members = sum(guild.member_count for guild in bot.guilds)
+    activity = discord.Game(f"{total_members}명의 유저와 함께함")
+    await bot.change_presence(activity=activity)
 
 # 로그 채널 가져오기 또는 비공개 채널 생성
 async def get_or_create_log_channel(guild: discord.Guild):
