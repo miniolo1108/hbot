@@ -6,15 +6,18 @@ import os
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=">", intents=intents)
 
+async def update_bot_presence():
+    total_members = sum(guild.member_count for guild in bot.guilds)
+    activity = discord.Game(f"{total_members}명의 유저와 함께함")
+    await bot.change_presence(activity=activity)
+
 @bot.event
 async def on_ready():
     print(f"✅ 봇 실행됨: {bot.user}")
     for guild in bot.guilds:
         print(f'서버 이름: {guild.name} (ID: {guild.id})')
     total_members = sum(guild.member_count for guild in bot.guilds)
-    activity = discord.Game(f"{total_members}명의 유저와 함께함")
-    await bot.change_presence(activity=activity)
-
+    await update_bot_presence()
 async def get_or_create_log_channel(guild: discord.Guild):
     # 1. 주제가 "hyerin-log"인 기존 채널 찾기
     for channel in guild.text_channels:
@@ -226,6 +229,14 @@ command_descriptions = {
     "개발자": "👨‍💻 봇 개발자 정보를 표시합니다.\n사용법: `>개발자`",
     "명령어": "ℹ️ 특정 명령어에 대한 설명을 표시합니다.\n사용법: `>명령어 [명령어이름]`",
 }
+
+@bot.event
+async def on_member_join(member):
+    await update_bot_presence()
+
+@bot.event
+async def on_member_remove(member):
+    await update_bot_presence()
 
 bot.run(os.getenv("BOT_TOKEN"))
 
