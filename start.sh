@@ -1,2 +1,3 @@
-#!/bin/bash
-python3 main.py
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+python main.py
